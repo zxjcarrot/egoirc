@@ -36,7 +36,7 @@ if err != nil {
 }
 
 // called when there is message
-handlePRIVMSG := EventHandler(func(e Event, c *Command, err error, data interface{}) bool {
+handlePRIVMSG := egoirc.EventHandler(func(e Event, c *Command, err error, data interface{}) bool {
         //convert back to string
         me := data.(string)
 		log.Printf("[%s] %s %s says: %s\n", me, c.prefix, c.params[0], c.params[1])
@@ -44,7 +44,7 @@ handlePRIVMSG := EventHandler(func(e Event, c *Command, err error, data interfac
 })
 
 // called when registered
-handleRPLWELCOME := EventHandler(func(e Event, c *Command, err error, data interface{}) bool {
+handleRPLWELCOME := egoirc.EventHandler(func(e Event, c *Command, err error, data interface{}) bool {
         //convert back to string
     	log.Println(data.(string), "connected")
     	//now registered, join a channel
@@ -70,5 +70,6 @@ cli.Stop()
 ```
 ##Examples
 see `cli_test.go`.
+
 
 
