@@ -19,10 +19,25 @@ type EventHandler func(e Event, c *Command, err error, data interface{}) bool
 //                error events: see err.go for detailed events.
 type Event string
 
-type eventData struct {
+type eventRegistry struct {
 	e       Event
 	handler EventHandler
 	data    interface{}
+}
+
+// general event type
+const (
+	et_error = iota // error event
+	et_cmd          // command event
+	et_user         // user-defined event
+)
+
+type eventType int
+type eventData struct {
+	et  eventType
+	e   Event
+	c   *Command
+	err error
 }
 
 const (

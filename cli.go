@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	defaultReadCmdBuf   = 512
+	defaultEventBuf     = 1024
 	defaultWriteCmdBuf  = 512
 	defaultPingInterval = 10 * time.Second
 	defaultRegInteval   = 2 * time.Second
@@ -52,8 +52,8 @@ func flagToModeString(flags int) (ret string) {
 
 // Setup represents configuration for a particular irc client
 type Setup struct {
-	// maximum # of buffered commands in the read channel, @defaultReadCmdBuf is used if 0 provided
-	readBufCnt int
+	// maximum # of buffered event in the event channel, @defaultEventBuf is used if 0 provided
+	eventBufCnt int
 	// maximum # of buffered commands in the write channel, @defaultWriteCmdBuf is used if 0 provided
 	writeBufCnt int
 	// takes the form of "host[:port]" where host could be ip address or hostname and
@@ -89,12 +89,11 @@ type Setup struct {
 type Client struct {
 	conn       ircConn
 	setup      Setup
-	cbs        map[Event]*eventData
-	readc      chan *Command
-	writec     chan *Command
-	errc       chan error
-	eregc      chan *eventData // for event registeration
-	eunregc    chan Event      // for event unregistration
+	cbs        map[Event]*eventRegistry
+	writec     chan *Command       // channel to deliver command to network i/o goroutine
+	evc        chan *eventData     // channel to deliver event
+	eregc      chan *eventRegistry //channel to deliver event handler registration
+	eunregc    chan Event          // channel to deliver event hanlder unregistration
 	pingTicker *time.Ticker
 	regTicker  *time.Ticker
 	// # of times if this client tried to registered to the server.
@@ -102,7 +101,7 @@ type Client struct {
 	// Client exits when the this field exceeded @setup.regTries
 	regTried int
 	stopped  bool
-	mu       sync.Mutex // for stopped
+	sync.Mutex
 }
 
 func cbDefault(e Event, c *Command, err error, data interface{}) bool {
@@ -130,25 +129,33 @@ func NewClient(s Setup) (*Client, error) {
 	if s.realname == "" {
 		s.realname = s.nickname
 	}
-	if s.readBufCnt == 0 {
-		s.readBufCnt = defaultReadCmdBuf
+	if s.eventBufCnt == 0 {
+		s.eventBufCnt = defaultEventBuf
 	}
 	if s.writeBufCnt == 0 {
 		s.writeBufCnt = defaultWriteCmdBuf
 	}
 
 	cli.setup = s
-	cli.cbs = make(map[Event]*eventData)
+	cli.cbs = make(map[Event]*eventRegistry)
 
 	// default event data
-	ed := eventData{EV_DEFAULT, cbDefault, &cli}
+	ed := eventRegistry{EV_DEFAULT, cbDefault, &cli}
 	cli.cbs[EV_DEFAULT] = &ed
-	cli.cbs[EV_DISCONNECTED] = &ed
-	cli.cbs[EV_CONNECTED] = &ed
-	cli.cbs[EV_NET_ERROR] = &ed
-	cli.cbs[EV_ERROR] = &ed
 
 	return &cli, nil
+}
+
+func (cli *Client) getEventRegistry(e Event) *eventRegistry {
+	var (
+		er *eventRegistry
+		ok bool
+	)
+	if er, ok = cli.cbs[e]; !ok {
+		er = cli.cbs[EV_DEFAULT]
+	}
+	return er
+
 }
 
 func (cli *Client) Connect() (err error) {
@@ -158,32 +165,54 @@ func (cli *Client) Connect() (err error) {
 	}
 	cli.pingTicker = time.NewTicker(cli.setup.pingInterval)
 	cli.regTicker = time.NewTicker(cli.setup.regInterval)
-	cli.readc = make(chan *Command, cli.setup.readBufCnt)
 	cli.writec = make(chan *Command, cli.setup.writeBufCnt)
-	cli.errc = make(chan error, 10)
-	cli.eregc = make(chan *eventData, 10)
+	cli.evc = make(chan *eventData, 10)
+	cli.eregc = make(chan *eventRegistry, 10)
 	cli.eunregc = make(chan Event, 10)
-	cli.cbs[EV_CONNECTED].handler(EV_CONNECTED, nil, nil, cli.cbs[EV_CONNECTED].data)
+	er := cli.getEventRegistry(Event(EV_CONNECTED))
+	er.handler(Event(EV_CONNECTED), nil, nil, er.data)
 	return
+}
+
+func newEventData(et eventType, e Event, c *Command, err error) *eventData {
+	return &eventData{et, e, c, err}
+}
+
+func newErrorEventData(err error) *eventData {
+	return newEventData(et_error, "", nil, err)
+}
+
+func newCmdEventData(c *Command) *eventData {
+	return newEventData(et_cmd, "", c, nil)
+}
+
+func newUserEventData(e Event) *eventData {
+	return newEventData(et_user, e, nil, nil)
 }
 
 // Register installs the given handler with @data on event @e
 // returns true if the installation is successfully, false otherwise
 func (cli *Client) Register(e Event, handler EventHandler, data interface{}) {
-	var ed eventData
-	ed.e = e
-	ed.handler = handler
-	ed.data = data
+	cli.Lock()
+	defer cli.Unlock()
+	var er eventRegistry
+	er.e = e
+	er.handler = handler
+	er.data = data
 	if cli.eregc == nil { // before connecting to the server, register handlers directly
-		cli.cbs[e] = &ed
+		cli.cbs[e] = &er
 	} else {
-		cli.eregc <- &ed
+		cli.eregc <- &er
 	}
 }
 
 // Register removes the given handler on event @e
 // returns true if the removal is successfully, false otherwise
 func (cli *Client) Unregister(e Event) {
+	cli.Lock()
+	defer cli.Unlock()
+	var er eventRegistry
+	er.e = e
 	if cli.eunregc == nil { // before connecting to the server, unregister handlers directly
 		delete(cli.cbs, e)
 	} else {
@@ -202,19 +231,18 @@ func (cli *Client) readCommand() {
 		// keep reading until the connection is closed
 		line, err := cli.conn.readLine()
 		if err != nil {
-			cli.errc <- err
+			cli.evc <- newErrorEventData(err)
 			return
 		}
 		var cmd Command
 		err = cmd.unmarshal(line)
 		if err != nil {
-			cli.errc <- err
+			cli.evc <- newErrorEventData(err)
 		} else {
-			cli.readc <- &cmd
+			cli.evc <- newCmdEventData(&cmd)
 		}
 	}
 }
-
 func (cli *Client) writeCommand() {
 	defer func() {
 		if x := recover(); x != nil {
@@ -229,11 +257,11 @@ func (cli *Client) writeCommand() {
 		line, err := cmd.marshal()
 		//log.Printf("outgoing line:[%s]\n", line)
 		if err != nil {
-			cli.errc <- err
+			cli.evc <- newErrorEventData(err)
 		} else {
 			err := cli.conn.writeLine(line)
 			if err != nil {
-				cli.errc <- err
+				cli.evc <- newErrorEventData(err)
 				return
 			}
 		}
@@ -324,28 +352,22 @@ func (cli *Client) SendCommand(prefix, name string, params ...string) {
 }
 
 func (cli *Client) multiplexError(e error) bool {
-	var ed *eventData
+	var er *eventRegistry
 	if err, ok := e.(Error); ok {
-		if ed, ok = cli.cbs[Event(err2event[err.code])]; !ok {
-			ed = cli.cbs[EV_DEFAULT]
-		}
-		return ed.handler(Event(err2event[err.code]), nil, err, ed.data)
+		er = cli.getEventRegistry(Event(err2event[err.code]))
+		return er.handler(Event(err2event[err.code]), nil, err, er.data)
 	} else if err, ok := e.(net.Error); ok {
-		ed = cli.cbs[EV_NET_ERROR]
-		ed.handler(EV_NET_ERROR, nil, err, ed.data)
+		er = cli.getEventRegistry(Event(EV_NET_ERROR))
+		er.handler(EV_NET_ERROR, nil, err, er.data)
 		return false
 	} else {
-		ed = cli.cbs[EV_ERROR]
-		ed.handler(EV_ERROR, nil, e, ed.data)
+		er = cli.getEventRegistry(Event(EV_ERROR))
+		er.handler(EV_ERROR, nil, e, er.data)
 		return false
 	}
 }
 
 func (cli *Client) multiplexCmd(c *Command) bool {
-	var (
-		ed *eventData
-		ok = false
-	)
 	switch c.name {
 	case "001": //RPL_WELCOME
 		// marked as registered
@@ -357,10 +379,34 @@ func (cli *Client) multiplexCmd(c *Command) bool {
 		cli.setup.address = c.params[0]
 	}
 
-	if ed, ok = cli.cbs[Event(c.name)]; !ok {
-		ed = cli.cbs[EV_DEFAULT]
+	er := cli.getEventRegistry(Event(c.name))
+	return er.handler(Event(c.name), c, nil, er.data)
+}
+
+func (cli *Client) multiplex(ed *eventData) bool {
+
+	switch ed.et {
+	case et_error:
+		if ed.err == nil {
+			log.Println("error event but err is nil")
+			return false
+		}
+		return cli.multiplexError(ed.err)
+	case et_cmd:
+		if ed.c == nil {
+			log.Println("command event but c is nil")
+			return false
+		}
+		return cli.multiplexCmd(ed.c)
+	case et_user:
+		er := cli.getEventRegistry(ed.e)
+		return er.handler(ed.e, nil, nil, er.data)
 	}
-	return ed.handler(Event(c.name), c, nil, ed.data)
+	return true
+}
+
+func (cli *Client) Post(e Event) {
+	cli.evc <- newUserEventData(e)
 }
 
 // Spin registers to the irc server using nickname, realname, hostname provided by setup configuration
@@ -396,14 +442,9 @@ loop:
 				//log.Println("failed to register to server", cli.setup.address)
 				break loop
 			}
-		case e, ok := <-cli.errc:
-			//log.Println("incoming error:", e)
-			if !ok || !cli.multiplexError(e) {
-				break loop
-			}
-		case cmd, ok := <-cli.readc:
-			//log.Println("incoming command:", cmd)
-			if !ok || !cli.multiplexCmd(cmd) {
+		case ed, ok := <-cli.evc:
+			log.Println("incoming event:", ed)
+			if !ok || !cli.multiplex(ed) {
 				break loop
 			}
 		case ed, ok := <-cli.eregc:
@@ -425,16 +466,17 @@ loop:
 }
 
 func (cli *Client) Stop() {
-	cli.mu.Lock()
-	defer cli.mu.Unlock()
+	cli.Lock()
+	defer cli.Unlock()
 	if cli.stopped {
 		return
 	}
 
 	cli.conn.Close()
-	cli.cbs[EV_DISCONNECTED].handler(EV_DISCONNECTED, nil, nil, cli.cbs[EV_DISCONNECTED].data)
+	er := cli.getEventRegistry(Event(EV_DISCONNECTED))
+	er.handler(EV_DISCONNECTED, nil, nil, er.data)
 	cli.pingTicker.Stop()
-	close(cli.readc)
+	close(cli.evc)
 	close(cli.writec)
 	close(cli.eregc)
 	close(cli.eunregc)
