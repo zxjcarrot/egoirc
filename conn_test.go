@@ -1,7 +1,7 @@
 package egoirc
 
 import (
-	"fmt"
+	"log"
 	"testing"
 )
 
@@ -14,7 +14,7 @@ func TestNewConn(t *testing.T) {
 	}
 	for {
 		line, err := conn.readLine()
-		fmt.Printf("%s\n", line)
+		log.Printf("%s\n", line)
 		if err != nil {
 			t.Log(err)
 			break

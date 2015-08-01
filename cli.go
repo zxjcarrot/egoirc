@@ -2,8 +2,9 @@ package egoirc
 
 import (
 	"errors"
-	"fmt"
+	"log"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,38 @@ const (
 	defaultRegTries     = 10
 )
 
+// bit-or flags for usermode,
+//see https://tools.ietf.org/html/rfc2812#section-3.1.5 for detail about user mode
+const (
+	UMODE_AWAY           = 1                         // user is flagged as away;
+	UMODE_INVISIBLE      = UMODE_AWAY << 1           // marks a users as invisible;
+	UMODE_WALLOPS        = UMODE_INVISIBLE << 1      // user receives wallops;
+	UMODE_RESTRICTED     = UMODE_WALLOPS << 1        // restricted user connection;
+	UMODE_OPERATOR       = UMODE_RESTRICTED << 1     // operator flag;
+	UMODE_LOCAL_OPERATOR = UMODE_OPERATOR << 1       // locale operator flag
+	UMODE_SERVER_NOTICE  = UMODE_LOCAL_OPERATOR << 1 // marks a user for receipt of server notices.
+)
+
+var modeStrings = [...]string{ //user mode character
+	UMODE_AWAY:           "a",
+	UMODE_INVISIBLE:      "i",
+	UMODE_WALLOPS:        "w",
+	UMODE_RESTRICTED:     "r",
+	UMODE_OPERATOR:       "o",
+	UMODE_LOCAL_OPERATOR: "O",
+	UMODE_SERVER_NOTICE:  "s",
+}
+
+func flagToModeString(flags int) (ret string) {
+	var i uint
+	for i = 0; (1 << i) <= UMODE_SERVER_NOTICE; i++ {
+		if flags&(1<<i) != 0 {
+			ret += modeStrings[i]
+		}
+	}
+	return
+}
+
 // Setup represents configuration for a particular irc client
 type Setup struct {
 	// maximum # of buffered commands in the read channel, @defaultReadCmdBuf is used if 0 provided
@@ -27,7 +60,7 @@ type Setup struct {
 	// default port 6667 is used if omitted.
 	address string
 	// if to use tls protocol
-	tls bool
+	//tls bool
 	// @interval the interval in second to send the ping command to the server
 	// @defaultPingInterval is used if @interval 0 provided
 	pingInterval time.Duration
@@ -73,7 +106,7 @@ type Client struct {
 }
 
 func cbDefault(e Event, c *Command, err error, data interface{}) bool {
-	//fmt.Printf("event %s, command %v, err %v, data %p\n", string(e), c, err, data)
+	//log.Printf("event %s, command %v, err %v, data %p\n", string(e), c, err, data)
 	return true
 }
 
@@ -158,11 +191,11 @@ func (cli *Client) Unregister(e Event) {
 	}
 }
 
-func (cli *Client) doRead() {
+func (cli *Client) readCommand() {
 	// recover from writing to closed channel
 	defer func() {
 		if x := recover(); x != nil {
-			fmt.Println("doRead panic: ", x)
+			log.Println("readCommand panic: ", x)
 		}
 	}()
 	for {
@@ -182,10 +215,10 @@ func (cli *Client) doRead() {
 	}
 }
 
-func (cli *Client) doWrite() {
+func (cli *Client) writeCommand() {
 	defer func() {
 		if x := recover(); x != nil {
-			fmt.Println("doWrite panic: ", x)
+			log.Println("writeCommand panic: ", x)
 		}
 	}()
 	for {
@@ -194,7 +227,7 @@ func (cli *Client) doWrite() {
 			return
 		}
 		line, err := cmd.marshal()
-		//fmt.Printf("outgoing line:[%s]\n", line)
+		//log.Printf("outgoing line:[%s]\n", line)
 		if err != nil {
 			cli.errc <- err
 		} else {
@@ -207,23 +240,39 @@ func (cli *Client) doWrite() {
 	}
 }
 
-func (cli *Client) ping() {
-	cli.SendCommand("", "PING", cli.setup.address)
+// Ping issues a <ping> command to server indicated by @address
+func (cli *Client) Ping(address string) {
+	cli.SendCommand("", "PING", address)
 }
 
-func (cli *Client) nick() {
-	cli.SendCommand("", "NICK", cli.setup.nickname)
+// Nick issues a <nick> command to server
+func (cli *Client) Nick(nickname string) {
+	cli.SendCommand("", "NICK", nickname)
 }
 
-func (cli *Client) user() {
-	host := "*"
-	if cli.setup.hostname != "" {
-		host = cli.setup.hostname
+// User issues a <user> command to irc server
+// @nickname the nickname used in <nick> command
+// @mode bit-or flags of initial user mode, only UMODE_INVISIBLE and UMODE_WALLOPS are available for initial user mode.
+// 		 e.g. UMODE_INVISIBLE | UMODE_WALLOPS
+// @host hostname of this client, "*" is used if empty string provided
+// @realname realname for this client
+func (cli *Client) User(nickname string, mode int, host, realname string) {
+	// bit 2 for UMODE_WALLOPS, bit 3 for UMODE according to rfc2821
+	realmode := 0
+	if mode&UMODE_WALLOPS != 0 {
+		realmode |= 1 << 2
 	}
-	cli.SendCommand("", "USER", cli.setup.nickname, "8", host, ":"+cli.setup.realname)
+	if mode&UMODE_INVISIBLE != 0 {
+		realmode |= 1 << 3
+	}
+	if host == "" {
+		host = "*"
+	}
+
+	cli.SendCommand("", "USER", nickname, strconv.Itoa(realmode), host, ":"+realname)
 }
 
-// SendMesage sends a message to a receiver
+// PrivMsg sends a message to a receiver
 // Since irc protocol limits the length of a packet to 512 bytes,
 // the message will be properly fragmented into several packets if too long.
 // @receiver takes three form:
@@ -231,7 +280,7 @@ func (cli *Client) user() {
 //    				 a single nickname: paul
 //                   a group of nicknames or channels seprated by comma:  paul,#channel1,mike,#channel2
 // @msg the message to send
-func (cli *Client) SendMessage(receiver, msg string) {
+func (cli *Client) PrivMsg(receiver, msg string) {
 	min := 512 - (len(receiver) + 7 + 2) // 7 for "PRIVMSG", 2 for two spaces
 	for i := 0; i < len(msg); i += min {
 		start := i
@@ -243,11 +292,35 @@ func (cli *Client) SendMessage(receiver, msg string) {
 	}
 }
 
+// Mode issues a <mode> command to the irc server
+// @nickname the nickname of this client. For a user to successfully issue this command ,
+//           this must be the same one when registered to the server.
+// @onFlags the bit-or flags of modes to be turned on on this client.
+// @unsetFlags the bit-or flags of modes to be turned off on this client
+func (cli *Client) Mode(nickname string, onFlags, offFlags int) {
+	onString := flagToModeString(onFlags)
+	offString := flagToModeString(offFlags)
+	params := make([]string, 2)
+	if onString != "" {
+		params = append(params, "+"+onString)
+	}
+	if offString != "" {
+		params = append(params, "-"+offString)
+	}
+	if len(params) == 0 {
+		return
+	}
+	cli.SendCommand("", "MODE", params...)
+}
+
 // SendCommand sends a command to the irc server
-// see https://tools.ietf.org/html/rfc2812#section-2.3 for detailed definition of command
-//
+// see https://tools.ietf.org/html/rfc2812#section-2.3 for detailed definition of commands
 func (cli *Client) SendCommand(prefix, name string, params ...string) {
-	cli.writec <- newCommand(prefix, name, params...)
+	var cmd Command
+	cmd.prefix = prefix
+	cmd.name = name
+	cmd.params = append(cmd.params, params...)
+	cli.writec <- &cmd
 }
 
 func (cli *Client) multiplexError(e error) bool {
@@ -294,10 +367,10 @@ func (cli *Client) multiplexCmd(c *Command) bool {
 // and starts event multiplexing
 // Spin returns when Client.Stop() is called or
 func (cli *Client) Spin() {
-	cli.nick()
-	cli.user()
-	go cli.doRead()
-	go cli.doWrite()
+	cli.Nick(cli.setup.nickname)
+	cli.User(cli.setup.nickname, UMODE_INVISIBLE, "", cli.setup.realname)
+	go cli.readCommand()
+	go cli.writeCommand()
 
 loop:
 	for {
@@ -306,30 +379,30 @@ loop:
 			if !ok {
 				break loop
 			}
-			//fmt.Println("ping timer triggereds")
-			cli.ping()
+			//log.Println("ping timer triggereds")
+			cli.Ping(cli.setup.address)
 		case <-cli.regTicker.C:
 			if cli.regTried < 0 {
 				// registered
 				continue
 			} else if cli.regTried < cli.setup.regTries {
 				//retrying
-				//fmt.Println("retry registering", cli.regTried, "times.")
-				cli.nick()
-				cli.user()
+				//log.Println("retry registering", cli.regTried, "times.")
+				cli.Nick(cli.setup.nickname)
+				cli.User(cli.setup.nickname, UMODE_INVISIBLE, "", cli.setup.realname)
 				cli.regTried++
 			} else if cli.regTried >= cli.setup.regTries {
 				//failed
-				//fmt.Println("failed to register to server", cli.setup.address)
+				//log.Println("failed to register to server", cli.setup.address)
 				break loop
 			}
 		case e, ok := <-cli.errc:
-			//fmt.Println("incoming error:", e)
+			//log.Println("incoming error:", e)
 			if !ok || !cli.multiplexError(e) {
 				break loop
 			}
 		case cmd, ok := <-cli.readc:
-			//fmt.Println("incoming command:", cmd)
+			//log.Println("incoming command:", cmd)
 			if !ok || !cli.multiplexCmd(cmd) {
 				break loop
 			}
@@ -338,16 +411,16 @@ loop:
 				break loop
 			}
 			cli.cbs[ed.e] = ed
-			//fmt.Println("registered handler:", ed)
+			//log.Println("registered handler:", ed)
 		case e, ok := <-cli.eunregc:
 			if !ok {
 				break loop
 			}
 			delete(cli.cbs, e)
-			//fmt.Println("unregistered event:", e)
+			//log.Println("unregistered event:", e)
 		}
 	}
-	fmt.Println("out")
+	log.Println("out")
 	cli.Stop()
 }
 

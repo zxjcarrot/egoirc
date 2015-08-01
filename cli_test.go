@@ -1,7 +1,7 @@
 package egoirc
 
 import (
-	"fmt"
+	"log"
 	"math/rand"
 	"runtime"
 	"testing"
@@ -35,7 +35,7 @@ func TestClient(t *testing.T) {
 	time.Sleep(10 * time.Second)
 	cli.Stop()
 	time.Sleep(2 * time.Second) // let goroutines die
-	fmt.Println("stopped spinning")
+	log.Println("stopped spinning")
 	if n != runtime.NumGoroutine() {
 		t.Fatalf("%d goroutines still running!!!", runtime.NumGoroutine()-n)
 	}
@@ -107,14 +107,14 @@ func TestClientMessage(t *testing.T) {
 			return false
 		}
 		me := data.(string)
-		fmt.Printf("[%s] %s %s says: %s\n", me, c.prefix, c.params[0], c.params[1])
+		log.Printf("[%s] %s %s says: %s\n", me, c.prefix, c.params[0], c.params[1])
 		ready <- true
 		return true
 	})
 
 	// tell main goroutine that client is registered and ready to talk
 	handleRPLWELCOME := EventHandler(func(e Event, c *Command, err error, data interface{}) bool {
-		fmt.Println(data.(string), "connected")
+		log.Println(data.(string), "connected")
 		if err != nil {
 			ready <- false
 			return false
@@ -151,9 +151,9 @@ func TestClientMessage(t *testing.T) {
 		}
 	}
 
-	fmt.Println("----------------- both are ready to send private messages --------------")
-	cli1.SendMessage(cli2name, "hi there, this is "+cli1name)
-	cli2.SendMessage(cli1name, "hi there, this is "+cli2name)
+	log.Println("----------------- both are ready to send private messages --------------")
+	cli1.PrivMsg(cli2name, "hi there, this is "+cli1name)
+	cli2.PrivMsg(cli1name, "hi there, this is "+cli2name)
 
 	timeout := time.After(10 * time.Second)
 	// wait for 2 clients both received message
@@ -168,13 +168,13 @@ func TestClientMessage(t *testing.T) {
 		}
 	}
 
-	fmt.Println("----------------- both are ready to join channel --------------")
+	log.Println("----------------- both are ready to join channel --------------")
 	cli1.SendCommand("", "JOIN", "#obe")
 	cli2.SendCommand("", "JOIN", "#obe")
 	time.Sleep(5 * time.Second)
-	fmt.Println("----------------- both are ready to send channel messages --------------")
-	cli1.SendMessage("#obe", "hi there, this is "+cli1name)
-	cli2.SendMessage("#obe", "hi there, this is "+cli2name)
+	log.Println("----------------- both are ready to send channel messages --------------")
+	cli1.PrivMsg("#obe", "hi there, this is "+cli1name)
+	cli2.PrivMsg("#obe", "hi there, this is "+cli2name)
 
 	timeout = time.After(10 * time.Second)
 	// wait for 2 clients both received message
