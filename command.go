@@ -9,9 +9,9 @@ import (
 )
 
 type Command struct {
-	prefix string
-	name   string
-	params []string
+	Prefix string
+	Name   string
+	Params []string
 }
 
 type rule struct {
@@ -92,25 +92,26 @@ func threeDigits(name string) bool {
 
 func newCommand(prefix, name string, params ...string) *Command {
 	var cmd Command
-	cmd.prefix = prefix
-	cmd.name = name
-	cmd.params = append(cmd.params, params...)
+	cmd.Prefix = prefix
+	cmd.Name = name
+	cmd.Params = append(cmd.Params, params...)
 	return &cmd
 }
 
 // return if the given command is valid
 func checkCmd(c *Command) (err error) {
-	if threeDigits(c.name) {
+	name := strings.ToUpper(c.Name)
+	if threeDigits(name) {
 		return
 	}
 
-	r, ok := validCmds[c.name]
+	r, ok := validCmds[name]
 
 	if !ok {
 		err = Error{ERR_INVALID_CMD, err2msg[ERR_INVALID_CMD], c}
-	} else if len(c.params) < r.minParams {
+	} else if len(c.Params) < r.minParams {
 		err = Error{ERR_NEED_MORE_PARAMS, err2msg[ERR_NEED_MORE_PARAMS], c}
-	} else if r.needPrefix && (len(c.params) < 1 || c.params[0][0] != ':') {
+	} else if r.needPrefix && (len(c.Params) < 1 || c.Params[0][0] != ':') {
 		err = Error{ERR_NEED_PREFIX, err2msg[ERR_NEED_PREFIX], c}
 	}
 
@@ -125,15 +126,15 @@ func (c *Command) marshal() (line string, err error) {
 
 	var buf bytes.Buffer
 
-	if c.prefix != "" {
+	if c.Prefix != "" {
 		buf.WriteString(":")
-		buf.WriteString(c.prefix)
+		buf.WriteString(c.Prefix)
 		buf.WriteString(" ")
 	}
-	buf.WriteString(c.name)
-	if len(c.params) > 0 {
+	buf.WriteString(c.Name)
+	if len(c.Params) > 0 {
 		buf.WriteString(" ")
-		buf.WriteString(strings.Join(c.params, " "))
+		buf.WriteString(strings.Join(c.Params, " "))
 	}
 
 	buf.WriteString("\r\n")
@@ -162,13 +163,13 @@ func parse(line string) (Command, error) {
 		if len(parts) < 2 {
 			return c, Error{ERR_INVALID_MSG, err2msg[ERR_INVALID_MSG], nil}
 		}
-		c.prefix = parts[0][1:] // discard ':'
+		c.Prefix = parts[0][1:] // discard ':'
 		idx++
 	}
 
-	c.name = parts[idx]
+	c.Name = parts[idx]
 	if idx+1 < len(parts) {
-		c.params = parts[idx+1:]
+		c.Params = parts[idx+1:]
 	}
 
 	return c, nil

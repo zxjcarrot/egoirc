@@ -18,16 +18,20 @@ const (
 	defaultRegTries     = 10
 )
 
-// bit-or flags for usermode,
+func init() {
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
+}
+
+// bits or'ed flags for usermode,
 //see https://tools.ietf.org/html/rfc2812#section-3.1.5 for detail about user mode
 const (
-	UMODE_AWAY           = 1                         // user is flagged as away;
-	UMODE_INVISIBLE      = UMODE_AWAY << 1           // marks a users as invisible;
-	UMODE_WALLOPS        = UMODE_INVISIBLE << 1      // user receives wallops;
-	UMODE_RESTRICTED     = UMODE_WALLOPS << 1        // restricted user connection;
-	UMODE_OPERATOR       = UMODE_RESTRICTED << 1     // operator flag;
-	UMODE_LOCAL_OPERATOR = UMODE_OPERATOR << 1       // locale operator flag
-	UMODE_SERVER_NOTICE  = UMODE_LOCAL_OPERATOR << 1 // marks a user for receipt of server notices.
+	UMODE_AWAY           = 1 << iota // user is flagged as away;
+	UMODE_INVISIBLE                  // marks a users as invisible;
+	UMODE_WALLOPS                    // user receives wallops;
+	UMODE_RESTRICTED                 // restricted user connection;
+	UMODE_OPERATOR                   // operator flag;
+	UMODE_LOCAL_OPERATOR             // locale operator flag
+	UMODE_SERVER_NOTICE              // marks a user for receipt of server notices.
 )
 
 var modeStrings = [...]string{ //user mode character
@@ -53,28 +57,28 @@ func flagToModeString(flags int) (ret string) {
 // Setup represents configuration for a particular irc client
 type Setup struct {
 	// maximum # of buffered event in the event channel, @defaultEventBuf is used if 0 provided
-	eventBufCnt int
+	EventBufCnt int
 	// maximum # of buffered commands in the write channel, @defaultWriteCmdBuf is used if 0 provided
-	writeBufCnt int
+	WriteBufCnt int
 	// takes the form of "host[:port]" where host could be ip address or hostname and
 	// default port 6667 is used if omitted.
-	address string
+	Address string
 	// if to use tls protocol
 	//tls bool
 	// @interval the interval in second to send the ping command to the server
 	// @defaultPingInterval is used if @interval 0 provided
-	pingInterval time.Duration
+	PingInterval time.Duration
 	// nickname used on the irc network
-	nickname string
+	Nickname string
 	// realname used on the irc network, nickname is used if not provided
-	realname string
+	Realname string
 	// hostname representing this client on the irc network
-	hostname string
-	// @regInterval the interval in second to register to the server
+	Hostname string
+	// @RegInterval the interval in second to register to the server
 	// @defaultRegInteval is used if @interval 0 provided
-	regInterval time.Duration
+	RegInterval time.Duration
 	// # of registeration tries w/o success to be considered failed
-	regTries int
+	RegTries int
 }
 
 // Client acts as a client to an irc server
@@ -98,10 +102,10 @@ type Client struct {
 	regTicker  *time.Ticker
 	// # of times if this client tried to registered to the server.
 	// a client is successfully registered when server sends back RPL_WELCOME reply, and this field is marked -1.
-	// Client exits when the this field exceeded @setup.regTries
+	// Client exits when the this field exceeded @setup.RegTries
 	regTried int
 	stopped  bool
-	sync.Mutex
+	mu       sync.Mutex
 }
 
 func cbDefault(e Event, c *Command, err error, data interface{}) bool {
@@ -111,29 +115,29 @@ func cbDefault(e Event, c *Command, err error, data interface{}) bool {
 
 func NewClient(s Setup) (*Client, error) {
 	var cli Client
-	if s.pingInterval == 0 {
-		s.pingInterval = defaultPingInterval
+	if s.PingInterval == 0 {
+		s.PingInterval = defaultPingInterval
 	}
-	if s.regInterval == 0 {
-		s.regInterval = defaultRegInteval
+	if s.RegInterval == 0 {
+		s.RegInterval = defaultRegInteval
 	}
-	if s.regTries == 0 {
-		s.regTries = defaultRegTries
+	if s.RegTries == 0 {
+		s.RegTries = defaultRegTries
 	}
-	if !strings.Contains(s.address, ":") {
-		s.address += ":" + defaultPort
+	if !strings.Contains(s.Address, ":") {
+		s.Address += ":" + defaultPort
 	}
-	if s.nickname == "" {
+	if s.Nickname == "" {
 		return nil, errors.New("nickname is required")
 	}
-	if s.realname == "" {
-		s.realname = s.nickname
+	if s.Realname == "" {
+		s.Realname = s.Nickname
 	}
-	if s.eventBufCnt == 0 {
-		s.eventBufCnt = defaultEventBuf
+	if s.EventBufCnt == 0 {
+		s.EventBufCnt = defaultEventBuf
 	}
-	if s.writeBufCnt == 0 {
-		s.writeBufCnt = defaultWriteCmdBuf
+	if s.WriteBufCnt == 0 {
+		s.WriteBufCnt = defaultWriteCmdBuf
 	}
 
 	cli.setup = s
@@ -163,9 +167,9 @@ func (cli *Client) Connect() (err error) {
 	if err != nil {
 		return
 	}
-	cli.pingTicker = time.NewTicker(cli.setup.pingInterval)
-	cli.regTicker = time.NewTicker(cli.setup.regInterval)
-	cli.writec = make(chan *Command, cli.setup.writeBufCnt)
+	cli.pingTicker = time.NewTicker(cli.setup.PingInterval)
+	cli.regTicker = time.NewTicker(cli.setup.RegInterval)
+	cli.writec = make(chan *Command, cli.setup.WriteBufCnt)
 	cli.evc = make(chan *eventData, 10)
 	cli.eregc = make(chan *eventRegistry, 10)
 	cli.eunregc = make(chan Event, 10)
@@ -193,8 +197,8 @@ func newUserEventData(e Event) *eventData {
 // Register installs the given handler with @data on event @e
 // returns true if the installation is successfully, false otherwise
 func (cli *Client) Register(e Event, handler EventHandler, data interface{}) {
-	cli.Lock()
-	defer cli.Unlock()
+	cli.mu.Lock()
+	defer cli.mu.Unlock()
 	var er eventRegistry
 	er.e = e
 	er.handler = handler
@@ -209,8 +213,8 @@ func (cli *Client) Register(e Event, handler EventHandler, data interface{}) {
 // Register removes the given handler on event @e
 // returns true if the removal is successfully, false otherwise
 func (cli *Client) Unregister(e Event) {
-	cli.Lock()
-	defer cli.Unlock()
+	cli.mu.Lock()
+	defer cli.mu.Unlock()
 	var er eventRegistry
 	er.e = e
 	if cli.eunregc == nil { // before connecting to the server, unregister handlers directly
@@ -224,7 +228,7 @@ func (cli *Client) readCommand() {
 	// recover from writing to closed channel
 	defer func() {
 		if x := recover(); x != nil {
-			log.Println("readCommand panic: ", x)
+			//log.Println("readCommand panic: ", x)
 		}
 	}()
 	for {
@@ -246,7 +250,7 @@ func (cli *Client) readCommand() {
 func (cli *Client) writeCommand() {
 	defer func() {
 		if x := recover(); x != nil {
-			log.Println("writeCommand panic: ", x)
+			//log.Println("writeCommand panic: ", x)
 		}
 	}()
 	for {
@@ -255,7 +259,9 @@ func (cli *Client) writeCommand() {
 			return
 		}
 		line, err := cmd.marshal()
-		//log.Printf("outgoing line:[%s]\n", line)
+
+		//log.Printf("outgoing cmd %v -> line:[%s]\n", cmd, line)
+
 		if err != nil {
 			cli.evc <- newErrorEventData(err)
 		} else {
@@ -280,7 +286,7 @@ func (cli *Client) Nick(nickname string) {
 
 // User issues a <user> command to irc server
 // @nickname the nickname used in <nick> command
-// @mode bit-or flags of initial user mode, only UMODE_INVISIBLE and UMODE_WALLOPS are available for initial user mode.
+// @mode bits or'ed flags of initial user mode, only UMODE_INVISIBLE and UMODE_WALLOPS are available for initial user mode.
 // 		 e.g. UMODE_INVISIBLE | UMODE_WALLOPS
 // @host hostname of this client, "*" is used if empty string provided
 // @realname realname for this client
@@ -323,8 +329,8 @@ func (cli *Client) PrivMsg(receiver, msg string) {
 // Mode issues a <mode> command to the irc server
 // @nickname the nickname of this client. For a user to successfully issue this command ,
 //           this must be the same one when registered to the server.
-// @onFlags the bit-or flags of modes to be turned on on this client.
-// @unsetFlags the bit-or flags of modes to be turned off on this client
+// @onFlags the bits or'ed flags of modes to be turned on on this client.
+// @unsetFlags the bits or'ed flags of modes to be turned off on this client
 func (cli *Client) Mode(nickname string, onFlags, offFlags int) {
 	onString := flagToModeString(onFlags)
 	offString := flagToModeString(offFlags)
@@ -345,9 +351,9 @@ func (cli *Client) Mode(nickname string, onFlags, offFlags int) {
 // see https://tools.ietf.org/html/rfc2812#section-2.3 for detailed definition of commands
 func (cli *Client) SendCommand(prefix, name string, params ...string) {
 	var cmd Command
-	cmd.prefix = prefix
-	cmd.name = name
-	cmd.params = append(cmd.params, params...)
+	cmd.Prefix = prefix
+	cmd.Name = name
+	cmd.Params = append(cmd.Params, params...)
 	cli.writec <- &cmd
 }
 
@@ -368,7 +374,7 @@ func (cli *Client) multiplexError(e error) bool {
 }
 
 func (cli *Client) multiplexCmd(c *Command) bool {
-	switch c.name {
+	switch c.Name {
 	case "001": //RPL_WELCOME
 		// marked as registered
 		cli.regTried = -1
@@ -376,11 +382,11 @@ func (cli *Client) multiplexCmd(c *Command) bool {
 		cli.regTicker.Stop()
 	case "004":
 		// save server's real hostname since the server user provided may behind a DNS load balancer
-		cli.setup.address = c.params[0]
+		cli.setup.Address = c.Params[0]
 	}
 
-	er := cli.getEventRegistry(Event(c.name))
-	return er.handler(Event(c.name), c, nil, er.data)
+	er := cli.getEventRegistry(Event(c.Name))
+	return er.handler(Event(c.Name), c, nil, er.data)
 }
 
 func (cli *Client) multiplex(ed *eventData) bool {
@@ -413,8 +419,8 @@ func (cli *Client) Post(e Event) {
 // and starts event multiplexing
 // Spin returns when Client.Stop() is called or
 func (cli *Client) Spin() {
-	cli.Nick(cli.setup.nickname)
-	cli.User(cli.setup.nickname, UMODE_INVISIBLE, "", cli.setup.realname)
+	cli.Nick(cli.setup.Nickname)
+	cli.User(cli.setup.Nickname, UMODE_INVISIBLE, "", cli.setup.Realname)
 	go cli.readCommand()
 	go cli.writeCommand()
 
@@ -426,24 +432,24 @@ loop:
 				break loop
 			}
 			//log.Println("ping timer triggereds")
-			cli.Ping(cli.setup.address)
+			cli.Ping(cli.setup.Address)
 		case <-cli.regTicker.C:
 			if cli.regTried < 0 {
 				// registered
 				continue
-			} else if cli.regTried < cli.setup.regTries {
+			} else if cli.regTried < cli.setup.RegTries {
 				//retrying
 				//log.Println("retry registering", cli.regTried, "times.")
-				cli.Nick(cli.setup.nickname)
-				cli.User(cli.setup.nickname, UMODE_INVISIBLE, "", cli.setup.realname)
+				cli.Nick(cli.setup.Nickname)
+				cli.User(cli.setup.Nickname, UMODE_INVISIBLE, "", cli.setup.Realname)
 				cli.regTried++
-			} else if cli.regTried >= cli.setup.regTries {
+			} else if cli.regTried >= cli.setup.RegTries {
 				//failed
-				//log.Println("failed to register to server", cli.setup.address)
+				//log.Println("failed to register to server", cli.setup.Address)
 				break loop
 			}
 		case ed, ok := <-cli.evc:
-			log.Println("incoming event:", ed)
+			//log.Println("incoming event:", ed)
 			if !ok || !cli.multiplex(ed) {
 				break loop
 			}
@@ -461,13 +467,13 @@ loop:
 			//log.Println("unregistered event:", e)
 		}
 	}
-	log.Println("out")
+	//log.Println("out")
 	cli.Stop()
 }
 
 func (cli *Client) Stop() {
-	cli.Lock()
-	defer cli.Unlock()
+	cli.mu.Lock()
+	defer cli.mu.Unlock()
 	if cli.stopped {
 		return
 	}

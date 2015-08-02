@@ -23,7 +23,7 @@ const (
 func newConn(s *Setup) (conn ircConn, err error) {
 	var newConn ircConn
 
-	if newConn.c, err = net.Dial("tcp", s.address); err != nil {
+	if newConn.c, err = net.Dial("tcp", s.Address); err != nil {
 		return
 	}
 	newConn.r = bufio.NewReader(newConn.c)

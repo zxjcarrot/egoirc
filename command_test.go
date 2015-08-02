@@ -42,12 +42,12 @@ func min(a, b int) int {
 }
 
 func Equal(c1, c2 Command) bool {
-	if c1.prefix != c2.prefix || c1.name != c2.name || len(c1.params) != len(c2.params) {
+	if c1.Prefix != c2.Prefix || c1.Name != c2.Name || len(c1.Params) != len(c2.Params) {
 		return false
 	}
 
-	for i := 0; i < min(len(c1.params), len(c2.params)); i++ {
-		if c1.params[i] != c2.params[i] {
+	for i := 0; i < min(len(c1.Params), len(c2.Params)); i++ {
+		if c1.Params[i] != c2.Params[i] {
 			return false
 		}
 	}

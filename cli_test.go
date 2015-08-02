@@ -9,12 +9,12 @@ import (
 )
 
 var s = Setup{
-	address:      "irc.freenode.net",
-	nickname:     "paulo",
-	realname:     "paulo321",
-	pingInterval: 10 * time.Second,
-	regInterval:  5 * time.Second,
-	regTries:     10,
+	Address:      "irc.freenode.net",
+	Nickname:     "paulo",
+	Realname:     "paulo321",
+	PingInterval: 10 * time.Second,
+	RegInterval:  5 * time.Second,
+	RegTries:     10,
 }
 
 func TestClient(t *testing.T) {
@@ -82,18 +82,20 @@ func generateNickname() (name string) {
 	}
 	return
 }
+
 func TestClientMessage(t *testing.T) {
+	rand.Seed(time.Now().UnixNano())
 	cli1name := generateNickname()
 	cli2name := generateNickname()
-	s.nickname = cli1name
-	s.realname = s.nickname
+	s.Nickname = cli1name
+	s.Realname = s.Nickname
 	cli1, err := NewClient(s)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	s.nickname = cli2name
-	s.realname = s.nickname
+	s.Nickname = cli2name
+	s.Realname = s.Nickname
 	cli2, err := NewClient(s)
 	if err != nil {
 		t.Fatal(err)
@@ -103,11 +105,12 @@ func TestClientMessage(t *testing.T) {
 
 	handlePRIVMSG := EventHandler(func(e Event, c *Command, err error, data interface{}) bool {
 		if err != nil {
+			log.Println(err)
 			t.Fatal(err)
 			return false
 		}
 		me := data.(string)
-		log.Printf("[%s] %s %s says: %s\n", me, c.prefix, c.params[0], c.params[1])
+		log.Printf("[%s] %s %s says: %s\n", me, c.Prefix, c.Params[0], c.Params[1])
 		ready <- true
 		return true
 	})
@@ -176,7 +179,7 @@ func TestClientMessage(t *testing.T) {
 	cli1.PrivMsg("#obe", "hi there, this is "+cli1name)
 	cli2.PrivMsg("#obe", "hi there, this is "+cli2name)
 
-	timeout = time.After(10 * time.Second)
+	timeout = time.After(20 * time.Second)
 	// wait for 2 clients both received message
 	for i := 0; i < 2; i++ {
 		select {
@@ -190,4 +193,81 @@ func TestClientMessage(t *testing.T) {
 	}
 	cli1.Stop()
 	cli2.Stop()
+}
+
+func TestClientRPLList(t *testing.T) {
+	rand.Seed(time.Now().UnixNano())
+	s.Nickname = generateNickname()
+	cli, err := NewClient(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// timing
+	var start int64
+
+	// tell main goroutine that client is registered and ready to talk
+	handleRPLWELCOME := EventHandler(func(e Event, c *Command, err error, data interface{}) bool {
+		log.Println(data.(string), "registered")
+		if err != nil {
+			t.Fatal(err)
+			return false
+		}
+		log.Println("now is", time.Now(), "starts pulling channel list")
+		start = time.Now().Unix()
+		// grab whole list of channels
+		cli.SendCommand("", "list")
+		return true
+	})
+
+	var cnt int64 = 0
+	// tell main goroutine that client is registered and ready to talk
+	handleRPLLIST := EventHandler(func(e Event, c *Command, err error, data interface{}) bool {
+		if err != nil {
+			t.Fatal(err)
+			return false
+		}
+		log.Println(c.Prefix, c.Name, c.Params)
+		cnt = cnt + 1
+		return true
+	})
+
+	done := make(chan bool)
+	// tell main goroutine that client is registered and ready to talk
+	handleRPLLISTEND := EventHandler(func(e Event, c *Command, err error, data interface{}) bool {
+		if err != nil {
+			t.Fatal(err)
+			done <- false
+			return false
+		}
+		done <- true
+		return true
+	})
+
+	// RPL_WELCOME
+	cli.Register("001", handleRPLWELCOME, s.Nickname)
+	// RPL_LIST
+	cli.Register("322", handleRPLLIST, s.Nickname)
+	// RPL_LISTEND
+	cli.Register("323", handleRPLLISTEND, s.Nickname)
+
+	if err = cli.Connect(); err != nil {
+		t.Fatal(err)
+	}
+
+	go cli.Spin()
+
+	timeout := time.After(30 * time.Second)
+	// wait for listing ends or half a minute
+	select {
+	case <-done:
+		break
+	case <-timeout:
+		log.Println("took too long!!!")
+		break
+	}
+	cli.Stop()
+	log.Println("now is", time.Now(), "done pulling channel list")
+	now := time.Now().Unix()
+	log.Println("took", now-start, "seconds,", cnt/(now-start), "/ ops")
 }

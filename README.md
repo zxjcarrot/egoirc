@@ -28,7 +28,7 @@ s.address = "irc.freenode.net"
 s.nickname = "yournickname"
 s.realname = "yourrealname" // nickname will be used if not provided
 s.hostname = "yourhostname" // "*" will be used if not provided
-s.pingInterval = 10 * time.Second // default to 10s if not provided
+s.PingInterval = 10 * time.Second // default to 10s if not provided
 
 cli, err := egoirc.NewClient(s)
 if err != nil {
@@ -39,7 +39,7 @@ if err != nil {
 handlePRIVMSG := egoirc.EventHandler(func(e Event, c *Command, err error, data interface{}) bool {
         //convert back to string
         me := data.(string)
-		log.Printf("[%s] %s %s says: %s\n", me, c.prefix, c.params[0], c.params[1])
+		log.Printf("[%s] %s %s says: %s\n", me, c.Prefix, c.Params[0], c.Params[1])
 		return true
 })
 

@@ -7,7 +7,7 @@ import (
 
 func TestNewConn(t *testing.T) {
 	s := Setup{}
-	s.address = "irc.freenode.net:6667"
+	s.Address = "irc.freenode.net:6667"
 	conn, err := newConn(&s)
 	if err != nil {
 		t.Fatal(err)
