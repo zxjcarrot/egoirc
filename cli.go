@@ -54,6 +54,8 @@ func flagToModeString(flags int) (ret string) {
 	return
 }
 
+type empty struct{}
+
 // Setup represents configuration for a particular irc client
 type Setup struct {
 	// maximum # of buffered event in the event channel, @defaultEventBuf is used if 0 provided
@@ -98,6 +100,7 @@ type Client struct {
 	evc        chan *eventData     // channel to deliver event
 	eregc      chan *eventRegistry //channel to deliver event handler registration
 	eunregc    chan Event          // channel to deliver event hanlder unregistration
+	closing    chan empty          // purely for cleanup signal
 	pingTicker *time.Ticker
 	regTicker  *time.Ticker
 	// # of times if this client tried to registered to the server.
@@ -159,7 +162,6 @@ func (cli *Client) getEventRegistry(e Event) *eventRegistry {
 		er = cli.cbs[EV_DEFAULT]
 	}
 	return er
-
 }
 
 func (cli *Client) Connect() (err error) {
@@ -170,9 +172,10 @@ func (cli *Client) Connect() (err error) {
 	cli.pingTicker = time.NewTicker(cli.setup.PingInterval)
 	cli.regTicker = time.NewTicker(cli.setup.RegInterval)
 	cli.writec = make(chan *Command, cli.setup.WriteBufCnt)
-	cli.evc = make(chan *eventData, 10)
+	cli.evc = make(chan *eventData, cli.setup.EventBufCnt)
 	cli.eregc = make(chan *eventRegistry, 10)
 	cli.eunregc = make(chan Event, 10)
+	cli.closing = make(chan empty)
 	er := cli.getEventRegistry(Event(EV_CONNECTED))
 	er.handler(Event(EV_CONNECTED), nil, nil, er.data)
 	return
@@ -225,12 +228,6 @@ func (cli *Client) Unregister(e Event) {
 }
 
 func (cli *Client) readCommand() {
-	// recover from writing to closed channel
-	defer func() {
-		if x := recover(); x != nil {
-			//log.Println("readCommand panic: ", x)
-		}
-	}()
 	for {
 		// keep reading until the connection is closed
 		line, err := cli.conn.readLine()
@@ -247,29 +244,25 @@ func (cli *Client) readCommand() {
 		}
 	}
 }
+
 func (cli *Client) writeCommand() {
-	defer func() {
-		if x := recover(); x != nil {
-			//log.Println("writeCommand panic: ", x)
-		}
-	}()
 	for {
-		cmd, ok := <-cli.writec
-		if !ok { // main goroutine tells to close the
-			return
-		}
-		line, err := cmd.marshal()
+		select {
+		case cmd := <-cli.writec:
+			line, err := cmd.marshal()
 
-		//log.Printf("outgoing cmd %v -> line:[%s]\n", cmd, line)
+			//log.Printf("outgoing cmd %v -> line:[%s]\n", cmd, line)
 
-		if err != nil {
-			cli.evc <- newErrorEventData(err)
-		} else {
-			err := cli.conn.writeLine(line)
 			if err != nil {
 				cli.evc <- newErrorEventData(err)
-				return
+			} else {
+				err := cli.conn.writeLine(line)
+				if err != nil {
+					cli.evc <- newErrorEventData(err)
+				}
 			}
+		case _ = <-cli.closing:
+			return
 		}
 	}
 }
@@ -465,26 +458,26 @@ loop:
 			}
 			delete(cli.cbs, e)
 			//log.Println("unregistered event:", e)
+		case _ = <-cli.closing:
+			break loop
 		}
 	}
-	//log.Println("out")
+	log.Println("out")
+	//clean up
 	cli.Stop()
 }
 
 func (cli *Client) Stop() {
 	cli.mu.Lock()
 	defer cli.mu.Unlock()
-	if cli.stopped {
+	if cli.stopped == true {
 		return
 	}
-
 	cli.conn.Close()
 	er := cli.getEventRegistry(Event(EV_DISCONNECTED))
 	er.handler(EV_DISCONNECTED, nil, nil, er.data)
+	close(cli.closing) // signal other goroutines to exit
 	cli.pingTicker.Stop()
-	close(cli.evc)
-	close(cli.writec)
-	close(cli.eregc)
-	close(cli.eunregc)
+	cli.regTicker.Stop()
 	cli.stopped = true
 }

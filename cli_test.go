@@ -18,6 +18,7 @@ var s = Setup{
 }
 
 func TestClient(t *testing.T) {
+	log.Println("----------------TestClient begins----------------")
 	cli, err := NewClient(s)
 
 	if err != nil {
@@ -39,9 +40,12 @@ func TestClient(t *testing.T) {
 	if n != runtime.NumGoroutine() {
 		t.Fatalf("%d goroutines still running!!!", runtime.NumGoroutine()-n)
 	}
+	log.Println("----------------TestClient ends----------------")
 }
 
 func TestClientConnection(t *testing.T) {
+	log.Println("----------------TestClientConnection begins----------------")
+
 	cli, err := NewClient(s)
 
 	if err != nil {
@@ -74,6 +78,7 @@ func TestClientConnection(t *testing.T) {
 	if disconnected == false {
 		t.Fatal("still connected")
 	}
+	log.Println("----------------TestClientConnection ends----------------")
 }
 
 func generateNickname() (name string) {
@@ -84,6 +89,8 @@ func generateNickname() (name string) {
 }
 
 func TestClientMessage(t *testing.T) {
+	log.Println("----------------TestClientMessage begins----------------")
+
 	rand.Seed(time.Now().UnixNano())
 	cli1name := generateNickname()
 	cli2name := generateNickname()
@@ -193,9 +200,11 @@ func TestClientMessage(t *testing.T) {
 	}
 	cli1.Stop()
 	cli2.Stop()
+	log.Println("----------------TestClientMessage ends----------------")
 }
 
 func TestClientRPLList(t *testing.T) {
+	log.Println("----------------TestClientRPLList begins----------------")
 	rand.Seed(time.Now().UnixNano())
 	s.Nickname = generateNickname()
 	cli, err := NewClient(s)
@@ -267,7 +276,10 @@ func TestClientRPLList(t *testing.T) {
 		break
 	}
 	cli.Stop()
+	// wait for other goroutines to die
+	time.Sleep(2 * time.Second)
 	log.Println("now is", time.Now(), "done pulling channel list")
 	now := time.Now().Unix()
 	log.Println("took", now-start, "seconds,", cnt/(now-start), "/ ops")
+	log.Println("----------------TestClientRPLList ends----------------")
 }
