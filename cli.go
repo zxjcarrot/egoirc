@@ -112,7 +112,7 @@ type Client struct {
 }
 
 func cbDefault(e Event, c *Command, err error, data interface{}) bool {
-	//log.Printf("event %s, command %v, err %v, data %p\n", string(e), c, err, data)
+	log.Printf("event %s, command %v, err %v, data %p\n", string(e), c, err, data)
 	return true
 }
 

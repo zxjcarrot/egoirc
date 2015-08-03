@@ -203,6 +203,49 @@ func TestClientMessage(t *testing.T) {
 	log.Println("----------------TestClientMessage ends----------------")
 }
 
+func TestClientPost(t *testing.T) {
+	log.Println("----------------TestClientPost begins----------------")
+	rand.Seed(time.Now().UnixNano())
+	s.Nickname = generateNickname()
+	cli, err := NewClient(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// tell main goroutine that client is registered and ready to talk
+	handleRPLWELCOME := EventHandler(func(e Event, c *Command, err error, data interface{}) bool {
+		log.Println(data.(string), "registered")
+		if err != nil {
+			t.Fatal(err)
+			return false
+		}
+		// registered, go invisible
+		cli.Post(Event("hide"))
+		return true
+	})
+
+	// user-defined event
+	handleHIDE := EventHandler(func(e Event, c *Command, err error, data interface{}) bool {
+		log.Println(data.(string), "triggered", e, "event, now go invisible")
+		cli.Mode(s.Nickname, UMODE_INVISIBLE, 0)
+		return true
+	})
+
+	// RPL_WELCOME
+	cli.Register("001", handleRPLWELCOME, s.Nickname)
+	cli.Register("hide", handleHIDE, s.Nickname)
+
+	if err = cli.Connect(); err != nil {
+		t.Fatal(err)
+	}
+
+	go cli.Spin()
+
+	time.Sleep(15 * time.Second)
+	cli.Stop()
+	log.Println("----------------TestClientPost ends----------------")
+}
+
 func TestClientRPLList(t *testing.T) {
 	log.Println("----------------TestClientRPLList begins----------------")
 	rand.Seed(time.Now().UnixNano())
