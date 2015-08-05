@@ -81,6 +81,8 @@ type Setup struct {
 	RegInterval time.Duration
 	// # of registeration tries w/o success to be considered failed
 	RegTries int
+	// # bits or'ed flags of initial user mode, only UMODE_INVISIBLE and UMODE_WALLOPS are available at this stage
+	InitUMode int
 }
 
 // Client acts as a client to an irc server
@@ -112,7 +114,7 @@ type Client struct {
 }
 
 func cbDefault(e Event, c *Command, err error, data interface{}) bool {
-	log.Printf("event %s, command %v, err %v, data %p\n", string(e), c, err, data)
+	//log.Printf("event %s, command %v, err %v, data %p\n", string(e), c, err, data)
 	return true
 }
 
@@ -413,7 +415,7 @@ func (cli *Client) Post(e Event) {
 // Spin returns when Client.Stop() is called or
 func (cli *Client) Spin() {
 	cli.Nick(cli.setup.Nickname)
-	cli.User(cli.setup.Nickname, UMODE_INVISIBLE, "", cli.setup.Realname)
+	cli.User(cli.setup.Nickname, cli.setup.InitUMode, "", cli.setup.Realname)
 	go cli.readCommand()
 	go cli.writeCommand()
 
@@ -434,7 +436,7 @@ loop:
 				//retrying
 				//log.Println("retry registering", cli.regTried, "times.")
 				cli.Nick(cli.setup.Nickname)
-				cli.User(cli.setup.Nickname, UMODE_INVISIBLE, "", cli.setup.Realname)
+				cli.User(cli.setup.Nickname, cli.setup.InitUMode, "", cli.setup.Realname)
 				cli.regTried++
 			} else if cli.regTried >= cli.setup.RegTries {
 				//failed
