@@ -21,7 +21,7 @@ egoirc also works with user-defined events, simply use `Client.Post` method to p
 
 ##Usage
 
-```
+```go
 /* set up configurations, check out Setup struct in cli.go */
 var s egoirc.Setup
 s.address = "irc.freenode.net"
